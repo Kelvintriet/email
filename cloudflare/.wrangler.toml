@@ -1,0 +1,7 @@
+name = "koolmail-email-worker"
+main = "cloudflare-worker.js"
+compatibility_date = "2024-01-01"
+# After filling up the varibles, delete the dot at the file name and run npx wrangler deploy 
+[vars]
+CONVEX_SITE_URL = "Your url"
+WEBHOOK_SECRET  = "Your assigned secret"

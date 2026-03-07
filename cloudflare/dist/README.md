@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "koolmail-email-worker" generated at 2026-03-07T02:12:40.742Z.
