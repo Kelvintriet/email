@@ -16,7 +16,8 @@ export default defineSchema({
     messageId: v.optional(v.string()),
     inReplyTo: v.optional(v.string()),
     threadId: v.optional(v.string()),
-    folder: v.optional(v.string()), // "inbox" | "sent" | "spam"
+    folder: v.optional(v.string()), // "inbox" | "sent" | "spam" | "scheduled"
+    scheduledAt: v.optional(v.number()),
     // Attachments stored in Convex Storage
     attachments: v.optional(v.array(v.object({
       storageId: v.id("_storage"),

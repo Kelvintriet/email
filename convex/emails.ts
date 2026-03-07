@@ -1,6 +1,8 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, internalQuery, internalAction, action } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { internal } from "./_generated/api";
+import { Resend } from "resend";
 
 const attachmentValidator = v.object({
   storageId: v.id("_storage"),
@@ -20,11 +22,11 @@ export const list = query({
     
     const targetFolder = folder || "inbox";
     
-    if (targetFolder === "sent") {
+    if (targetFolder === "sent" || targetFolder === "scheduled") {
       return await ctx.db
         .query("emails")
         .withIndex("by_from", (q) => q.eq("from", user.email!))
-        .filter((q) => q.eq(q.field("folder"), "sent"))
+        .filter((q) => q.eq(q.field("folder"), targetFolder))
         .order("desc")
         .collect();
     } else {
@@ -225,7 +227,7 @@ export const listThread = query({
     return await ctx.db
       .query("emails")
       .withIndex("by_thread", (q) => q.eq("threadId", threadId))
-      .filter((q) => q.eq(q.field("to"), user.email!))
+      .filter((q) => q.or(q.eq(q.field("to"), user.email!), q.eq(q.field("from"), user.email!)))
       .order("asc")
       .collect();
   },
@@ -270,5 +272,72 @@ export const getBlockedSenders = query({
       .collect();
       
     return senders.map(s => s.senderEmail);
+  },
+});
+
+export const getScheduledEmailForSend = internalQuery({
+  args: { emailId: v.id("emails") },
+  handler: async (ctx, { emailId }) => {
+    return await ctx.db.get(emailId);
+  }
+});
+
+export const updateToSent = internalMutation({
+  args: { emailId: v.id("emails") },
+  handler: async (ctx, { emailId }) => {
+    await ctx.db.patch(emailId, { folder: "sent", scheduledAt: undefined });
+  }
+});
+
+export const sendScheduledEmailAction = internalAction({
+  args: { emailId: v.id("emails") },
+  handler: async (ctx, { emailId }) => {
+    const email = await ctx.runQuery(internal.emails.getScheduledEmailForSend, { emailId });
+    if (!email || email.folder !== "scheduled") return; // cancelled or already sent
+
+    const resend = new Resend(process.env.RESEND_API_KEY);
+    const { error } = await resend.emails.send({
+      from: email.from,
+      to: email.to,
+      subject: email.subject,
+      html: email.htmlBody || email.body,
+      ...(email.inReplyTo ? {
+        headers: {
+          "In-Reply-To": `<${email.inReplyTo}>`,
+          "References": `<${email.inReplyTo}>`,
+        }
+      } : {})
+    });
+
+    if (error) {
+      throw new Error(`Resend error: ${error.message}`);
+    }
+    await ctx.runMutation(internal.emails.updateToSent, { emailId });
+  }
+});
+
+export const saveScheduled = mutation({
+  args: {
+    from: v.string(),
+    to: v.string(),
+    subject: v.string(),
+    body: v.string(),
+    htmlBody: v.optional(v.string()),
+    inReplyTo: v.optional(v.string()),
+    scheduledAt: v.number()
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthenticated");
+    
+    const emailId = await ctx.db.insert("emails", {
+      ...args,
+      folder: "scheduled",
+      receivedAt: Date.now(),
+      read: true,
+    });
+    
+    await ctx.scheduler.runAt(args.scheduledAt, internal.emails.sendScheduledEmailAction, { emailId });
+    return emailId;
   },
 });
