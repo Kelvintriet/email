@@ -9,7 +9,25 @@ export default defineSchema({
     to: v.string(),
     subject: v.string(),
     body: v.string(),
+    htmlBody: v.optional(v.string()),
     receivedAt: v.number(),
     read: v.boolean(),
-  }).index("by_to", ["to"]),
+    // Threading
+    messageId: v.optional(v.string()),
+    inReplyTo: v.optional(v.string()),
+    threadId: v.optional(v.string()),
+    folder: v.optional(v.string()), // "inbox" | "sent" | "spam"
+    // Attachments stored in Convex Storage
+    attachments: v.optional(v.array(v.object({
+      storageId: v.id("_storage"),
+      name: v.string(),
+      mimeType: v.string(),
+      size: v.number(),
+    }))),
+  }).index("by_to", ["to"]).index("by_thread", ["threadId"]).index("by_from", ["from"]),
+  
+  spamSenders: defineTable({
+    userEmail: v.string(),
+    senderEmail: v.string(),
+  }).index("by_user_sender", ["userEmail", "senderEmail"]),
 });

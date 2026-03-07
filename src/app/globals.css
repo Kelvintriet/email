@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+@source "../**/*.{tsx,ts,jsx,js}";
+@source "../../convex/**/*.ts";
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
