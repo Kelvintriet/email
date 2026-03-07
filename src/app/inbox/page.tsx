@@ -455,10 +455,14 @@ function InboxView() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const [currentFolder, setCurrentFolder] = useState<"inbox" | "sent" | "spam">("inbox");
   const emails = useQuery(api.emails.list, { folder: currentFolder });
+  const blockedSenders = useQuery(api.emails.getBlockedSenders) || [];
+
   const markRead = useMutation(api.emails.markRead);
+  const markUnread = useMutation(api.emails.markUnread);
   const moveToFolder = useMutation(api.emails.moveToFolder);
   const markSenderAsSpam = useMutation(api.emails.markSenderAsSpam);
-  
+  const unmarkSenderAsSpam = useMutation(api.emails.unmarkSenderAsSpam);
+
   const [selected, setSelected] = useState<Email | null>(null);
   const [showHtml, setShowHtml] = useState(false);
   // "floating" = bottom-right panel, "maximized" = takes over right pane, null = closed
@@ -497,9 +501,21 @@ function InboxView() {
     if (selected?._id === email._id) setSelected(null);
   }
 
+  async function handleUnmarkSpam(email: Email) {
+    await moveToFolder({ id: email._id, folder: "inbox" });
+    if (selected?._id === email._id) setSelected(null);
+  }
+
   async function handleSpamSender(email: Email) {
     if (confirm(`Are you sure you want to mark ${email.from} as a spam sender? All past and future emails from them will be sent to Spam.`)) {
       await markSenderAsSpam({ senderEmail: email.from });
+      if (selected?.from === email.from) setSelected(null);
+    }
+  }
+
+  async function handleUnmarkSpamSender(email: Email) {
+    if (confirm(`Are you sure you want to unmark ${email.from} as a spam sender? Their past emails will be moved back to the Inbox.`)) {
+      await unmarkSenderAsSpam({ senderEmail: email.from });
       if (selected?.from === email.from) setSelected(null);
     }
   }
@@ -607,15 +623,42 @@ function InboxView() {
                         <Icon path="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" className="h-3.5 w-3.5" /> Reply
                       </button>
                     </div>
-                    {currentFolder !== "sent" && currentFolder !== "spam" && (
+                    {currentFolder !== "sent" && (
                       <div className="flex items-center gap-2">
-                        <button onClick={() => { handleMarkSpam(selected); setSelected(null); }}
-                          className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100 transition-colors">
-                          Spam
-                        </button>
-                        <button onClick={() => { handleSpamSender(selected); setSelected(null); }}
-                          className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100 transition-colors">
-                          Block Sender
+                        {currentFolder === "spam" ? (
+                          <button onClick={() => { handleUnmarkSpam(selected); setSelected(null); }}
+                            className="flex items-center gap-1 rounded-lg border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 hover:bg-green-100 transition-colors">
+                            Not Spam
+                          </button>
+                        ) : (
+                          <button onClick={() => { handleMarkSpam(selected); setSelected(null); }}
+                            className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100 transition-colors">
+                            Spam
+                          </button>
+                        )}
+                        
+                        {blockedSenders.includes(selected.from) ? (
+                          <button onClick={() => { handleUnmarkSpamSender(selected); setSelected(null); }}
+                            className="flex items-center gap-1 rounded-lg border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-600 hover:bg-green-100 transition-colors">
+                            Unblock Sender
+                          </button>
+                        ) : (
+                          <button onClick={() => { handleSpamSender(selected); setSelected(null); }}
+                            className="flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-100 transition-colors">
+                            Block Sender
+                          </button>
+                        )}
+                        
+                        <button onClick={() => { 
+                            if (selected.read) {
+                              markUnread({ id: selected._id });
+                            } else {
+                              markRead({ id: selected._id });
+                            }
+                            setSelected({ ...selected, read: !selected.read });
+                          }}
+                          className="flex items-center gap-1 rounded-lg border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-100 transition-colors">
+                          {selected.read ? "Mark Unread" : "Mark Read"}
                         </button>
                       </div>
                     )}

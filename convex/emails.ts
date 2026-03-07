@@ -182,6 +182,38 @@ export const markSenderAsSpam = mutation({
   },
 });
 
+export const unmarkSenderAsSpam = mutation({
+  args: { senderEmail: v.string() },
+  handler: async (ctx, { senderEmail }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthenticated");
+    const user = await ctx.db.get(userId);
+    if (!user?.email) throw new Error("No user email");
+
+    const existing = await ctx.db
+      .query("spamSenders")
+      .withIndex("by_user_sender", (q) => q.eq("userEmail", user.email!).eq("senderEmail", senderEmail))
+      .first();
+      
+    if (existing) {
+      await ctx.db.delete(existing._id);
+    }
+
+    // Move all existing emails from this sender back to inbox
+    const existingEmails = await ctx.db
+      .query("emails")
+      .withIndex("by_to", (q) => q.eq("to", user.email!))
+      .filter((q) => q.eq(q.field("from"), senderEmail))
+      .collect();
+
+    for (const email of existingEmails) {
+      if (email.folder === "spam") {
+        await ctx.db.patch(email._id, { folder: undefined });
+      }
+    }
+  },
+});
+
 // Returns all emails in the same thread (sorted oldest-first for conversation view)
 export const listThread = query({
   args: { threadId: v.string() },
@@ -211,3 +243,32 @@ export const markRead = mutation({
   },
 });
 
+export const markUnread = mutation({
+  args: { id: v.id("emails") },
+  handler: async (ctx, { id }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthenticated");
+    const user = await ctx.db.get(userId);
+    const email = await ctx.db.get(id);
+    if (!email || email.to !== user?.email) throw new Error("Not found");
+    await ctx.db.patch(id, { read: false });
+  },
+});
+
+
+export const getBlockedSenders = query({
+  args: {},
+  handler: async (ctx) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const user = await ctx.db.get(userId);
+    if (!user?.email) return [];
+    
+    const senders = await ctx.db
+      .query("spamSenders")
+      .withIndex("by_user_sender", (q) => q.eq("userEmail", user.email!))
+      .collect();
+      
+    return senders.map(s => s.senderEmail);
+  },
+});
