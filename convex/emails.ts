@@ -1,6 +1,7 @@
-import { query, mutation, internalMutation, internalQuery, internalAction, action } from "./_generated/server";
-import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { query, mutation, internalMutation, internalQuery, internalAction } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Resend } from "resend";
 
@@ -11,21 +12,38 @@ const attachmentValidator = v.object({
   size: v.number(),
 });
 
+async function getCurrentUserEmail(ctx: QueryCtx | MutationCtx) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) {
+    return null;
+  }
+
+  const user = await ctx.db.get(userId);
+  return user?.email ?? null;
+}
+
+async function requireCurrentUserEmail(ctx: QueryCtx | MutationCtx) {
+  const userEmail = await getCurrentUserEmail(ctx);
+  if (!userEmail) {
+    throw new Error("Unauthenticated");
+  }
+
+  return userEmail;
+}
+
 // Returns the authenticated user's emails for a specific folder
 export const list = query({
   args: { folder: v.optional(v.string()) }, // "inbox", "sent", "spam"
   handler: async (ctx, { folder }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const user = await ctx.db.get(userId);
-    if (!user?.email) return [];
+    const userEmail = await getCurrentUserEmail(ctx);
+    if (!userEmail) return [];
     
     const targetFolder = folder || "inbox";
     
     if (targetFolder === "sent" || targetFolder === "scheduled") {
       return await ctx.db
         .query("emails")
-        .withIndex("by_from", (q) => q.eq("from", user.email!))
+        .withIndex("by_from", (q) => q.eq("from", userEmail))
         .filter((q) => q.eq(q.field("folder"), targetFolder))
         .order("desc")
         .collect();
@@ -33,7 +51,7 @@ export const list = query({
       // Inbox and spam are based on 'to' field
       return await ctx.db
         .query("emails")
-        .withIndex("by_to", (q) => q.eq("to", user.email!))
+        .withIndex("by_to", (q) => q.eq("to", userEmail))
         .filter((q) => q.eq(
           q.field("folder"), 
           targetFolder === "inbox" ? undefined : targetFolder // Note: old inbox emails have undefined folder
@@ -48,11 +66,10 @@ export const list = query({
 export const getAttachmentUrls = query({
   args: { id: v.id("emails") },
   handler: async (ctx, { id }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const user = await ctx.db.get(userId);
+    const userEmail = await getCurrentUserEmail(ctx);
+    if (!userEmail) return [];
     const email = await ctx.db.get(id);
-    if (!email || email.to !== user?.email) return [];
+    if (!email || email.to !== userEmail) return [];
     if (!email.attachments?.length) return [];
     return await Promise.all(
       email.attachments.map(async (att) => ({
@@ -125,11 +142,11 @@ export const saveSent = mutation({
     inReplyTo: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthenticated");
+    const userEmail = await requireCurrentUserEmail(ctx);
     
     return await ctx.db.insert("emails", {
       ...args,
+      from: userEmail,
       folder: "sent",
       receivedAt: Date.now(),
       read: true,
@@ -140,11 +157,9 @@ export const saveSent = mutation({
 export const moveToFolder = mutation({
   args: { id: v.id("emails"), folder: v.string() },
   handler: async (ctx, { id, folder }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthenticated");
-    const user = await ctx.db.get(userId);
+    const userEmail = await requireCurrentUserEmail(ctx);
     const email = await ctx.db.get(id);
-    if (!email || (email.to !== user?.email && email.from !== user?.email)) throw new Error("Not found");
+    if (!email || (email.to !== userEmail && email.from !== userEmail)) throw new Error("Not found");
     
     await ctx.db.patch(id, { folder: folder === "inbox" ? undefined : folder });
   },
@@ -153,20 +168,17 @@ export const moveToFolder = mutation({
 export const markSenderAsSpam = mutation({
   args: { senderEmail: v.string() },
   handler: async (ctx, { senderEmail }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthenticated");
-    const user = await ctx.db.get(userId);
-    if (!user?.email) throw new Error("No user email");
+    const userEmail = await requireCurrentUserEmail(ctx);
 
     // Add to spamSenders list if not already there
     const existing = await ctx.db
       .query("spamSenders")
-      .withIndex("by_user_sender", (q) => q.eq("userEmail", user.email!).eq("senderEmail", senderEmail))
+      .withIndex("by_user_sender", (q) => q.eq("userEmail", userEmail).eq("senderEmail", senderEmail))
       .first();
       
     if (!existing) {
       await ctx.db.insert("spamSenders", {
-        userEmail: user.email,
+        userEmail,
         senderEmail,
       });
     }
@@ -174,7 +186,7 @@ export const markSenderAsSpam = mutation({
     // Move all existing emails from this sender to spam
     const existingEmails = await ctx.db
       .query("emails")
-      .withIndex("by_to", (q) => q.eq("to", user.email!))
+      .withIndex("by_to", (q) => q.eq("to", userEmail))
       .filter((q) => q.eq(q.field("from"), senderEmail))
       .collect();
 
@@ -187,14 +199,11 @@ export const markSenderAsSpam = mutation({
 export const unmarkSenderAsSpam = mutation({
   args: { senderEmail: v.string() },
   handler: async (ctx, { senderEmail }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthenticated");
-    const user = await ctx.db.get(userId);
-    if (!user?.email) throw new Error("No user email");
+    const userEmail = await requireCurrentUserEmail(ctx);
 
     const existing = await ctx.db
       .query("spamSenders")
-      .withIndex("by_user_sender", (q) => q.eq("userEmail", user.email!).eq("senderEmail", senderEmail))
+      .withIndex("by_user_sender", (q) => q.eq("userEmail", userEmail).eq("senderEmail", senderEmail))
       .first();
       
     if (existing) {
@@ -204,7 +213,7 @@ export const unmarkSenderAsSpam = mutation({
     // Move all existing emails from this sender back to inbox
     const existingEmails = await ctx.db
       .query("emails")
-      .withIndex("by_to", (q) => q.eq("to", user.email!))
+      .withIndex("by_to", (q) => q.eq("to", userEmail))
       .filter((q) => q.eq(q.field("from"), senderEmail))
       .collect();
 
@@ -220,14 +229,12 @@ export const unmarkSenderAsSpam = mutation({
 export const listThread = query({
   args: { threadId: v.string() },
   handler: async (ctx, { threadId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const user = await ctx.db.get(userId);
-    if (!user?.email) return [];
+    const userEmail = await getCurrentUserEmail(ctx);
+    if (!userEmail) return [];
     return await ctx.db
       .query("emails")
       .withIndex("by_thread", (q) => q.eq("threadId", threadId))
-      .filter((q) => q.or(q.eq(q.field("to"), user.email!), q.eq(q.field("from"), user.email!)))
+      .filter((q) => q.or(q.eq(q.field("to"), userEmail), q.eq(q.field("from"), userEmail)))
       .order("asc")
       .collect();
   },
@@ -236,11 +243,9 @@ export const listThread = query({
 export const markRead = mutation({
   args: { id: v.id("emails") },
   handler: async (ctx, { id }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthenticated");
-    const user = await ctx.db.get(userId);
+    const userEmail = await requireCurrentUserEmail(ctx);
     const email = await ctx.db.get(id);
-    if (!email || email.to !== user?.email) throw new Error("Not found");
+    if (!email || email.to !== userEmail) throw new Error("Not found");
     await ctx.db.patch(id, { read: true });
   },
 });
@@ -248,11 +253,9 @@ export const markRead = mutation({
 export const markUnread = mutation({
   args: { id: v.id("emails") },
   handler: async (ctx, { id }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthenticated");
-    const user = await ctx.db.get(userId);
+    const userEmail = await requireCurrentUserEmail(ctx);
     const email = await ctx.db.get(id);
-    if (!email || email.to !== user?.email) throw new Error("Not found");
+    if (!email || email.to !== userEmail) throw new Error("Not found");
     await ctx.db.patch(id, { read: false });
   },
 });
@@ -261,14 +264,12 @@ export const markUnread = mutation({
 export const getBlockedSenders = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const user = await ctx.db.get(userId);
-    if (!user?.email) return [];
+    const userEmail = await getCurrentUserEmail(ctx);
+    if (!userEmail) return [];
     
     const senders = await ctx.db
       .query("spamSenders")
-      .withIndex("by_user_sender", (q) => q.eq("userEmail", user.email!))
+      .withIndex("by_user_sender", (q) => q.eq("userEmail", userEmail))
       .collect();
       
     return senders.map(s => s.senderEmail);
@@ -327,11 +328,11 @@ export const saveScheduled = mutation({
     scheduledAt: v.number()
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Unauthenticated");
+    const userEmail = await requireCurrentUserEmail(ctx);
     
     const emailId = await ctx.db.insert("emails", {
       ...args,
+      from: userEmail,
       folder: "scheduled",
       receivedAt: Date.now(),
       read: true,

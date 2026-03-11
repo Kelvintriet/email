@@ -1,10 +1,11 @@
 import { httpRouter, httpActionGeneric as httpAction } from "convex/server";
-import { auth } from "./auth";
 import { internal } from "./_generated/api";
 import { ConvexError } from "convex/values";
 import { Id } from "./_generated/dataModel";
+import { auth } from "./auth";
 
 const http = httpRouter();
+
 auth.addHttpRoutes(http);
 
 function checkSecret(req: Request): boolean {

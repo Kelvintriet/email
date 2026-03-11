@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { from, to, subject, body: emailBody, inReplyTo, attachments } = body;
+
   if (!from || !to || !subject || !emailBody) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }

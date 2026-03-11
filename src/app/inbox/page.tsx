@@ -1,8 +1,8 @@
 "use client";
 
+import { useAuthActions } from "@convex-dev/auth/react";
 import { useState, useRef, useCallback, useEffect } from "react";
 import { useConvexAuth, useQuery, useMutation } from "convex/react";
-import { useAuthActions } from "@convex-dev/auth/react";
 import { api } from "../../../convex/_generated/api";
 import { Id } from "../../../convex/_generated/dataModel";
 
@@ -150,7 +150,6 @@ function LoginForm() {
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Username */}
           <div>
             <label className="mb-1.5 block text-xs font-medium text-zinc-500 uppercase tracking-wide">
               Username
@@ -171,7 +170,6 @@ function LoginForm() {
             </div>
           </div>
 
-          {/* Password */}
           <div>
             <label className="mb-1.5 block text-xs font-medium text-zinc-500 uppercase tracking-wide">
               Password
@@ -187,7 +185,6 @@ function LoginForm() {
             />
           </div>
 
-          {/* Confirm password — only on sign up */}
           {mode === "signup" && (
             <div>
               <label className="mb-1.5 block text-xs font-medium text-zinc-500 uppercase tracking-wide">
@@ -218,32 +215,31 @@ function LoginForm() {
               ? mode === "signup" ? "Creating…" : "Signing in…"
               : mode === "signup" ? "Create account" : "Sign in"}
           </button>
-        </form>
 
-        {/* Toggle mode */}
-        <p className="mt-5 text-center text-sm text-zinc-500">
-          {mode === "signin" ? (
-            <>
-              No account?{" "}
-              <button
-                onClick={() => { setMode("signup"); setError(""); }}
-                className="font-semibold text-[#41431B] hover:text-[#20220E]"
-              >
-                Create one
-              </button>
-            </>
-          ) : (
-            <>
-              Already have an account?{" "}
-              <button
-                onClick={() => { setMode("signin"); setError(""); setConfirmPassword(""); }}
-                className="font-semibold text-[#41431B] hover:text-[#20220E]"
-              >
-                Sign in
-              </button>
-            </>
-          )}
-        </p>
+          <p className="text-center text-sm text-zinc-500">
+            {mode === "signin" ? (
+              <>
+                No account?{" "}
+                <button
+                  onClick={() => { setMode("signup"); setError(""); }}
+                  className="font-semibold text-[#41431B] hover:text-[#20220E]"
+                >
+                  Create one
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <button
+                  onClick={() => { setMode("signin"); setError(""); setConfirmPassword(""); }}
+                  className="font-semibold text-[#41431B] hover:text-[#20220E]"
+                >
+                  Sign in
+                </button>
+              </>
+            )}
+          </p>
+        </form>
       </div>
     </div>
   );
