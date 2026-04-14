@@ -2,7 +2,7 @@
 
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useConvexAuth, useQuery, useMutation, usePaginatedQuery } from "convex/react";
+import { useConvex, useConvexAuth, useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { toast } from "sonner";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 
 const DOMAIN = "koolname.asia";
-const MAX_ATTACHMENT_MB = 25;
+const MAX_ATTACHMENT_MB = 10;
 
 type Email = {
   _id: Id<"emails">;
@@ -108,78 +108,336 @@ function RichTextToolbar({ editor }: { editor: any }) {
 // ── Login ────────────────────────────────────────────────────────────────────
 function LoginForm() {
   const { signIn } = useAuthActions();
+  const convex = useConvex();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [stage, setStage] = useState<"signin-email" | "signin-password" | "signup-name" | "signup-basic" | "signup-username" | "signup-password">("signin-email");
   const [username, setUsername] = useState("");
+  const [lastName, setLastName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [birthMonth, setBirthMonth] = useState("");
+  const [birthDay, setBirthDay] = useState("");
+  const [birthYear, setBirthYear] = useState("");
+  const [gender, setGender] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [emailDraft, setEmailDraft] = useState("");
+
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  const days = Array.from({ length: 31 }, (_, index) => String(index + 1));
+  const years = Array.from({ length: 100 }, (_, index) => String(new Date().getFullYear() - index));
 
   function isValidUsername(u: string) { return /^[a-z0-9._-]{1,32}$/.test(u); }
+  function getAge(month: string, day: string, year: string) {
+    if (!month || !day || !year) return 0;
+    const born = new Date(Number(year), Number(month) - 1, Number(day));
+    const diff = Date.now() - born.getTime();
+    return new Date(diff).getUTCFullYear() - 1970;
+  }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  function resetSignupFlow() {
+    setStage("signup-name");
     setError("");
-    const trimmed = username.trim().toLowerCase();
-    if (!isValidUsername(trimmed)) {
-      setError("Username can only contain valid characters.");
-      return;
-    }
-    if (mode === "signup" && password !== confirmPassword) {
-      setError("Passwords do not match."); return;
-    }
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters."); return;
-    }
+    setLastName("");
+    setBirthMonth("");
+    setBirthDay("");
+    setBirthYear("");
+    setGender("");
+    setUsername("");
+    setPassword("");
+    setConfirmPassword("");
+  }
+
+  function resetSigninFlow() {
+    setStage("signin-email");
+    setError("");
+    setEmailDraft("");
+    setPassword("");
+  }
+
+  async function signInWithDraftEmail(email: string, nextPassword: string, flow: "signIn" | "signUp") {
     setLoading(true);
     try {
-      await signIn("password", { email: `${trimmed}@${DOMAIN}`, password, flow: mode === "signup" ? "signUp" : "signIn" });
+      await signIn("password", { email, password: nextPassword, flow });
     } catch {
-      setError(mode === "signup" ? "That username is already taken." : "Incorrect username or password.");
+      setError(flow === "signUp" ? "That username is already taken." : "Incorrect username or password.");
     } finally {
       setLoading(false);
     }
   }
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    if (mode === "signin") {
+      if (stage === "signin-email") {
+        const trimmed = emailDraft.trim().toLowerCase();
+        if (!isValidUsername(trimmed)) {
+          setError("Username can only contain valid characters.");
+          return;
+        }
+        setLoading(true);
+        try {
+          const signInUser = await convex.query(api.users.getByEmail, { email: `${trimmed}@${DOMAIN}` });
+          if (!signInUser) {
+            setError("That email does not exist.");
+            return;
+          }
+          setUsername(trimmed);
+          setStage("signin-password");
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+      if (password.length < 8) {
+        setError("Password must be at least 8 characters.");
+        return;
+      }
+      await signInWithDraftEmail(`${username}@${DOMAIN}`, password, "signIn");
+      return;
+    }
+
+    if (stage === "signup-name") {
+      if (!lastName.trim()) {
+        setError("Enter your last name to continue.");
+        return;
+      }
+      setStage("signup-basic");
+      return;
+    }
+
+    if (stage === "signup-basic") {
+      const age = getAge(birthMonth, birthDay, birthYear);
+      if (age < 13) {
+        setError("You must be above 13 years old.");
+        return;
+      }
+      if (!gender) {
+        setError("Choose your gender.");
+        return;
+      }
+      setStage("signup-username");
+      return;
+    }
+
+    if (stage === "signup-username") {
+      const trimmed = username.trim().toLowerCase();
+      if (!isValidUsername(trimmed)) {
+        setError("Username can only contain valid characters.");
+        return;
+      }
+      setLoading(true);
+      try {
+        const existingUser = await convex.query(api.users.getByEmail, { email: `${trimmed}@${DOMAIN}` });
+        if (existingUser) {
+          setError("That username is already taken.");
+          return;
+        }
+        setUsername(trimmed);
+        setStage("signup-password");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    await signInWithDraftEmail(`${username}@${DOMAIN}`, password, "signUp");
+  }
+
+  const signInStep = stage === "signin-password" ? 2 : 1;
+  const signUpStepMap = {
+    "signup-name": 1,
+    "signup-basic": 2,
+    "signup-username": 3,
+    "signup-password": 4,
+  } as const;
+  const currentStep = mode === "signin" ? signInStep : signUpStepMap[stage as keyof typeof signUpStepMap];
+
+  const totalSteps = mode === "signin" ? 2 : 4;
+
+  const goBack = () => {
+    setError("");
+    if (mode === "signin") {
+      if (stage === "signin-password") setStage("signin-email");
+      return;
+    }
+    if (stage === "signup-basic") setStage("signup-name");
+    else if (stage === "signup-username") setStage("signup-basic");
+    else if (stage === "signup-password") setStage("signup-username");
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-muted/40 font-sans">
-      <div className="w-full max-w-[440px] bg-card text-card-foreground p-8 rounded-xl shadow-lg border border-border">
-        <div className="mb-6 flex items-center justify-center gap-3">
-          <div className="rounded-full bg-primary/10 p-3">
-            <Mail className="h-8 w-8 text-primary" />
+    <div className="flex min-h-screen items-center justify-center bg-muted/40 font-sans px-4">
+      <div className="grid w-full max-w-[960px] overflow-hidden rounded-[28px] border border-border bg-card text-card-foreground shadow-lg md:grid-cols-[1.05fr_0.95fr]">
+        <div className="hidden flex-col justify-between border-b border-border bg-muted/20 p-10 md:flex md:border-b-0 md:border-r">
+          <div className="flex items-center gap-3">
+            <div className="rounded-full bg-primary/10 p-3 text-primary">
+              <Mail className="h-8 w-8" />
+            </div>
+            <span className="text-2xl font-bold tracking-tight text-foreground">KoolMail</span>
           </div>
-          <span className="text-2xl font-bold tracking-tight text-foreground">KoolMail</span>
+          <div className="max-w-md space-y-4">
+            <h2 className="text-4xl font-semibold tracking-tight text-foreground">
+              Clean, focused email that moves as fast as you do.
+            </h2>
+            <p className="text-base leading-7 text-muted-foreground">
+              Sign in with a single email step, or create an account in a Google-style flow with smooth step transitions and immediate validation when you continue.
+            </p>
+          </div>
+          <div className="w-full max-w-[320px] self-end">
+            <svg viewBox="0 0 320 220" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect x="18" y="24" width="284" height="172" rx="28" className="fill-background stroke-border" strokeWidth="1.5" />
+              <path d="M58 68H262" className="stroke-border" strokeWidth="2" strokeLinecap="round" />
+              <rect x="58" y="88" width="128" height="14" rx="7" className="fill-muted" />
+              <rect x="58" y="116" width="176" height="14" rx="7" className="fill-muted" />
+              <rect x="58" y="144" width="96" height="14" rx="7" className="fill-muted" />
+              <path d="M212 86C212 77.1634 219.163 70 228 70H250C258.837 70 266 77.1634 266 86V108C266 116.837 258.837 124 250 124H228C219.163 124 212 116.837 212 108V86Z" className="fill-primary/10 stroke-primary" strokeWidth="1.5" />
+              <path d="M226 95L239 105L256 89" className="stroke-primary" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
         </div>
-        <div className="flex flex-col space-y-1.5 text-center mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight">{mode === "signin" ? "Welcome back" : "Create an account"}</h1>
-          <p className="text-sm text-muted-foreground">{mode === "signin" ? `Enter your credentials to continue.` : `Your email will be username@${DOMAIN}.`}</p>
+
+        <div className="p-8 sm:p-10">
+          <div className="mb-6 flex items-center justify-center gap-3 md:hidden">
+            <div className="rounded-full bg-primary/10 p-3 text-primary">
+              <Mail className="h-8 w-8" />
+            </div>
+            <span className="text-2xl font-bold tracking-tight text-foreground">KoolMail</span>
+          </div>
+          <div className="flex flex-col space-y-1.5 text-center mb-6">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {mode === "signin"
+              ? (stage === "signin-email" ? "Welcome back" : "Enter your password")
+              : stage === "signup-name"
+                ? "Create your account"
+                : stage === "signup-basic"
+                  ? "Basic information"
+                  : stage === "signup-username"
+                    ? "How you’ll sign in"
+                    : "Create a password"}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            {mode === "signin"
+              ? (stage === "signin-email" ? "Enter your email to continue." : `Enter the password for ${username || `username@${DOMAIN}`}.`)
+              : (stage === "signup-name"
+                ? "Start with your last name."
+                : stage === "signup-basic"
+                  ? "Enter birthday and gender."
+                  : stage === "signup-username"
+                    ? `Your email will be username@${DOMAIN}.`
+                    : "Set a strong password and confirm it." )}
+          </p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <div className="flex rounded-md border border-input focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 bg-background transition-colors w-full h-10">
-              <input type="text" value={username} onChange={(e) => setUsername(e.target.value.toLowerCase())} placeholder="Username" required autoComplete="username" className="flex h-10 w-full rounded-md bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 border-0 focus:ring-0 shadow-none min-w-0" />
-              <span className="flex items-center px-3 text-sm text-muted-foreground select-none border-l border-input shrink-0 bg-muted/50 rounded-r-md">@${DOMAIN}</span>
-            </div>
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>Step {currentStep} of {totalSteps}</span>
+            <span className="font-medium text-foreground/70">{mode === "signin" ? "Sign in" : "Sign up"}</span>
           </div>
-          <div className="space-y-2">
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" required autoComplete={mode === "signup" ? "new-password" : "current-password"} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+
+          <div className="space-y-3 min-h-[220px]">
+            {mode === "signin" && stage === "signin-email" && (
+              <div key="signin-email" className="space-y-2 auth-step-enter">
+                <div className="flex rounded-md border border-input focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 bg-background transition-colors w-full h-11">
+                  <input type="text" value={emailDraft} onChange={(e) => setEmailDraft(e.target.value.toLowerCase())} placeholder="Username" required autoComplete="username" className="flex h-11 w-full rounded-md bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 border-0 focus:ring-0 shadow-none min-w-0" />
+                  <span className="flex items-center px-3 text-sm text-muted-foreground select-none border-l border-input shrink-0 bg-muted/50 rounded-r-md">@{DOMAIN}</span>
+                </div>
+              </div>
+            )}
+
+            {mode === "signin" && stage === "signin-password" && (
+              <div key="signin-password" className="space-y-2 auth-step-enter">
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" required autoComplete="current-password" className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
+              </div>
+            )}
+
+            {mode === "signup" && stage === "signup-name" && (
+              <div key="signup-name" className="space-y-2 auth-step-enter">
+                <input type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Last name" required className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
+              </div>
+            )}
+
+            {mode === "signup" && stage === "signup-basic" && (
+              <div key="signup-basic" className="space-y-3 auth-step-enter">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <select value={birthMonth} onChange={(e) => setBirthMonth(e.target.value)} className="h-11 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                    <option value="">Month</option>
+                    {months.map((month, index) => <option key={month} value={String(index + 1)}>{month}</option>)}
+                  </select>
+                  <select value={birthDay} onChange={(e) => setBirthDay(e.target.value)} className="h-11 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                    <option value="">Day</option>
+                    {days.map((day) => <option key={day} value={day}>{day}</option>)}
+                  </select>
+                  <select value={birthYear} onChange={(e) => setBirthYear(e.target.value)} className="h-11 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                    <option value="">Year</option>
+                    {years.map((year) => <option key={year} value={year}>{year}</option>)}
+                  </select>
+                </div>
+                <select value={gender} onChange={(e) => setGender(e.target.value)} className="h-11 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+                  <option value="">Gender</option>
+                  <option value="female">Female</option>
+                  <option value="male">Male</option>
+                </select>
+              </div>
+            )}
+
+            {mode === "signup" && stage === "signup-username" && (
+              <div key="signup-username" className="space-y-2 auth-step-enter">
+                <div className="flex rounded-md border border-input focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 bg-background transition-colors w-full h-11">
+                  <input type="text" value={username} onChange={(e) => setUsername(e.target.value.toLowerCase())} placeholder="Username" required autoComplete="username" className="flex h-11 w-full rounded-md bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 border-0 focus:ring-0 shadow-none min-w-0" />
+                  <span className="flex items-center px-3 text-sm text-muted-foreground select-none border-l border-input shrink-0 bg-muted/50 rounded-r-md">@{DOMAIN}</span>
+                </div>
+              </div>
+            )}
+
+            {mode === "signup" && stage === "signup-password" && (
+              <div key="signup-password" className="space-y-3 auth-step-enter">
+                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" required autoComplete="new-password" className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
+                <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm password" required autoComplete="new-password" className="flex h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" />
+              </div>
+            )}
           </div>
-          {mode === "signup" && (
-            <div className="space-y-2">
-              <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm password" required autoComplete="new-password" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" />
-            </div>
-          )}
+
           {error && <p className="text-[0.8rem] font-medium text-destructive">{error}</p>}
-          <button type="submit" disabled={loading} className="inline-flex w-full items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 mt-4">{loading ? "Please wait..." : (mode === "signup" ? "Sign up" : "Sign in")}</button>
+          <div className="flex items-center justify-between gap-3 pt-2">
+            <button type="button" onClick={goBack} disabled={mode === "signin" && stage === "signin-email" || mode === "signup" && stage === "signup-name"} className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md border border-input bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-50">
+              Back
+            </button>
+            {mode === "signin" && stage === "signin-email" ? (
+              <button type="submit" disabled={loading} className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50">
+                Next
+              </button>
+            ) : mode === "signup" && stage !== "signup-password" ? (
+              <button type="submit" disabled={loading} className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50">
+                Next
+              </button>
+            ) : (
+              <button type="submit" disabled={loading} className="inline-flex h-10 items-center justify-center whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50">
+                {loading ? "Please wait..." : (mode === "signup" ? "Create account" : "Sign in")}
+              </button>
+            )}
+          </div>
           
           <div className="mt-4 text-center text-sm text-muted-foreground">
             {mode === "signin" ? (
-              <>Don't have an account? <button type="button" onClick={() => { setMode("signup"); setError(""); }} className="font-semibold text-primary hover:text-primary/80 hover:underline">Sign up</button></>
+              <>Don't have an account? <button type="button" onClick={() => { setMode("signup"); resetSignupFlow(); }} className="font-semibold text-primary hover:text-primary/80 hover:underline">Sign up</button></>
             ) : (
-              <>Already have an account? <button type="button" onClick={() => { setMode("signin"); setError(""); setConfirmPassword(""); }} className="font-semibold text-primary hover:text-primary/80 hover:underline">Sign in</button></>
+              <>Already have an account? <button type="button" onClick={() => { setMode("signin"); resetSigninFlow(); }} className="font-semibold text-primary hover:text-primary/80 hover:underline">Sign in</button></>
             )}
           </div>
         </form>
+        </div>
       </div>
     </div>
   );
