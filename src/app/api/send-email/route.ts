@@ -17,6 +17,7 @@ export async function POST(req: NextRequest) {
     body?: string;
     inReplyTo?: string;
     attachments?: AttachmentPayload[];
+    trackingId?: string;
   };
   try {
     body = await req.json();
@@ -24,7 +25,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { from, to, subject, body: emailBody, inReplyTo, attachments } = body;
+  const { from, to, subject, body: emailBody, inReplyTo, attachments, trackingId } = body;
 
   if (!from || !to || !subject || !emailBody) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -34,7 +35,7 @@ export async function POST(req: NextRequest) {
     from,
     to,
     subject,
-    html: emailBody, // the compose sends HTML now
+    html: trackingId ? emailBody + `<img src="https://koolname.asia/api/tracking/${trackingId}" width="1" height="1" alt="" />` : emailBody,
     ...(inReplyTo && {
       headers: {
         "In-Reply-To": `<${inReplyTo}>`,

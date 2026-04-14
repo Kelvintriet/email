@@ -14,8 +14,8 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className="antialiased">
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className="antialiased dark:bg-zinc-950 dark:text-zinc-50">
         <ConvexAuthNextjsServerProvider>
           <Providers>{children}</Providers>
         </ConvexAuthNextjsServerProvider>

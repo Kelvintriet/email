@@ -1,4 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { paginationOptsValidator } from "convex/server";
 import { query, mutation, internalMutation, internalQuery, internalAction } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
@@ -160,8 +161,11 @@ export const moveToFolder = mutation({
     const userEmail = await requireCurrentUserEmail(ctx);
     const email = await ctx.db.get(id);
     if (!email || (email.to !== userEmail && email.from !== userEmail)) throw new Error("Not found");
-    
-    await ctx.db.patch(id, { folder: folder === "inbox" ? undefined : folder });
+
+    await ctx.db.patch(id, {
+      folder: folder === "inbox" ? undefined : folder,
+      deletedAt: folder === "trash" ? Date.now() : undefined,
+    });
   },
 });
 
@@ -340,5 +344,186 @@ export const saveScheduled = mutation({
     
     await ctx.scheduler.runAt(args.scheduledAt, internal.emails.sendScheduledEmailAction, { emailId });
     return emailId;
+  },
+});
+
+export const permanentlyDeleteTrash = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const trashedEmails = await ctx.db
+      .query("emails")
+      .filter((q) => q.eq(q.field("folder"), "trash"))
+      .collect();
+
+    for (const email of trashedEmails) {
+      const deletedAt = email.deletedAt ?? email.receivedAt;
+      if (deletedAt < thirtyDaysAgo) {
+        await ctx.db.delete(email._id);
+      }
+    }
+  },
+});
+
+export const listPaginated = query({
+  args: { folder: v.optional(v.string()), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { folder, paginationOpts }) => {
+    const userEmail = await getCurrentUserEmail(ctx);
+    if (!userEmail) return { page: [], isDone: true, continueCursor: "" };
+    
+    const targetFolder = folder || "inbox";
+    
+    if (targetFolder === "sent" || targetFolder === "scheduled") {
+      return await ctx.db
+        .query("emails")
+        .withIndex("by_from", (q) => q.eq("from", userEmail))
+        .filter((q) => q.eq(q.field("folder"), targetFolder))
+        .order("desc")
+        .paginate(paginationOpts);
+    } else {
+      return await ctx.db
+        .query("emails")
+        .withIndex("by_to", (q) => q.eq("to", userEmail))
+        .filter((q) => q.eq(q.field("folder"), targetFolder === "inbox" ? undefined : targetFolder))
+        .order("desc")
+        .paginate(paginationOpts);
+    }
+  },
+});
+
+export const search = query({
+  args: { query: v.string(), folder: v.optional(v.string()) },
+  handler: async (ctx, { query, folder }) => {
+    const userEmail = await getCurrentUserEmail(ctx);
+    if (!userEmail) return [];
+    const targetFolder = folder || "inbox";
+
+    const subjectResults = await ctx.db
+      .query("emails")
+      .withSearchIndex("search_subject", (q) => q.search("subject", query))
+      .take(20);
+      
+    const bodyResults = await ctx.db
+      .query("emails")
+      .withSearchIndex("search_body", (q) => q.search("body", query))
+      .take(20);
+
+    const merged = [...subjectResults, ...bodyResults];
+    const unique = Array.from(new Map(merged.map(e => [e._id, e])).values());
+
+    return unique.filter((e) => {
+      const isAuth = targetFolder === "sent" || targetFolder === "scheduled" ? e.from === userEmail : e.to === userEmail;
+      const isFolder = e.folder === (targetFolder === "inbox" ? undefined : targetFolder);
+      return isAuth && isFolder;
+    });
+  },
+});
+
+export const bulkMoveToFolder = mutation({
+  args: { ids: v.array(v.id("emails")), folder: v.string() },
+  handler: async (ctx, { ids, folder }) => {
+    const userEmail = await requireCurrentUserEmail(ctx);
+    for (const id of ids) {
+      const email = await ctx.db.get(id);
+      if (email && (email.to === userEmail || email.from === userEmail)) {
+        await ctx.db.patch(id, {
+          folder: folder === "inbox" ? undefined : folder,
+          deletedAt: folder === "trash" ? Date.now() : undefined,
+        });
+      }
+    }
+  },
+});
+
+export const bulkMarkRead = mutation({
+  args: { ids: v.array(v.id("emails")), read: v.boolean() },
+  handler: async (ctx, { ids, read }) => {
+    const userEmail = await requireCurrentUserEmail(ctx);
+    for (const id of ids) {
+      const email = await ctx.db.get(id);
+      if (email && email.to === userEmail) {
+        await ctx.db.patch(id, { read });
+      }
+    }
+  },
+});
+
+export const deletePermanently = mutation({
+  args: { id: v.id("emails") },
+  handler: async (ctx, { id }) => {
+    const userEmail = await requireCurrentUserEmail(ctx);
+    const email = await ctx.db.get(id);
+    if (!email || (email.to !== userEmail && email.from !== userEmail)) {
+      throw new Error("Not found");
+    }
+    if (email.folder !== "trash") {
+      throw new Error("Email must be in trash before permanent delete");
+    }
+    await ctx.db.delete(id);
+  },
+});
+
+export const bulkDeletePermanently = mutation({
+  args: { ids: v.array(v.id("emails")) },
+  handler: async (ctx, { ids }) => {
+    const userEmail = await requireCurrentUserEmail(ctx);
+    for (const id of ids) {
+      const email = await ctx.db.get(id);
+      if (email && (email.to === userEmail || email.from === userEmail) && email.folder === "trash") {
+        await ctx.db.delete(id);
+      }
+    }
+  },
+});
+
+export const markOpened = mutation({
+  args: { id: v.id("emails") },
+  handler: async (ctx, { id }) => {
+    const email = await ctx.db.get(id);
+    if (email && !email.openedAt) {
+      await ctx.db.patch(id, { openedAt: Date.now() });
+    }
+  },
+});
+
+export const saveDraft = mutation({
+  args: {
+    id: v.optional(v.id("emails")),
+    to: v.string(),
+    subject: v.string(),
+    body: v.string(),
+    htmlBody: v.optional(v.string()),
+    inReplyTo: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userEmail = await requireCurrentUserEmail(ctx);
+    const { id, ...draftFields } = args;
+    if (args.id) {
+      const existing = await ctx.db.get(args.id);
+      if (existing && existing.from === userEmail) {
+         await ctx.db.patch(args.id, { ...draftFields, receivedAt: Date.now() });
+         return args.id;
+      }
+    }
+    
+    return await ctx.db.insert("emails", {
+      ...draftFields,
+      from: userEmail,
+      folder: "drafts",
+      receivedAt: Date.now(),
+      read: true,
+    });
+  }
+});
+
+export const deleteDraft = mutation({
+  args: { id: v.id("emails") },
+  handler: async (ctx, { id }) => {
+    const userEmail = await requireCurrentUserEmail(ctx);
+    const email = await ctx.db.get(id);
+    if (!email || email.from !== userEmail || email.folder !== "drafts") {
+      throw new Error("Not found");
+    }
+    await ctx.db.delete(id);
   },
 });

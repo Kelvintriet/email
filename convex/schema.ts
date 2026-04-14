@@ -17,7 +17,9 @@ export default defineSchema({
     inReplyTo: v.optional(v.string()),
     threadId: v.optional(v.string()),
     folder: v.optional(v.string()), // "inbox" | "sent" | "spam" | "scheduled"
+    deletedAt: v.optional(v.number()),
     scheduledAt: v.optional(v.number()),
+    openedAt: v.optional(v.number()),
     // Attachments stored in Convex Storage
     attachments: v.optional(v.array(v.object({
       storageId: v.id("_storage"),
@@ -25,7 +27,9 @@ export default defineSchema({
       mimeType: v.string(),
       size: v.number(),
     }))),
-  }).index("by_to", ["to"]).index("by_thread", ["threadId"]).index("by_from", ["from"]),
+  }).index("by_to", ["to"]).index("by_thread", ["threadId"]).index("by_from", ["from"])
+    .searchIndex("search_body", { searchField: "body" })
+    .searchIndex("search_subject", { searchField: "subject" }),
   
   spamSenders: defineTable({
     userEmail: v.string(),
