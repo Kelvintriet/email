@@ -1,38 +1,109 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# KoolMail
+
+A full-stack email management application that gives every user their own personal inbox at a custom domain (e.g. `username@koolname.asia`). Built with Next.js, Convex, and Cloudflare Workers.
+
+## Features
+
+- **Personal inbox** — each registered user gets their own email address
+- **Compose & send** — rich text editor with bold, italic, underline, lists, headings, and more
+- **Email threading** — conversations are grouped using Message-ID / References headers
+- **Attachments** — upload and download file attachments (up to 25 MB per email)
+- **Scheduled sending** — write an email now and have it delivered at a future time
+- **Spam management** — block senders to keep unwanted mail out of your inbox
+- **Folder organization** — Inbox, Sent, Spam, and Scheduled folders
+- **Real-time updates** — Convex's live queries keep the UI in sync without polling
+- **Authentication** — sign up / sign in with username and password
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | Next.js (App Router), React 19, TypeScript, Tailwind CSS |
+| Backend | [Convex](https://convex.dev) – database, file storage, scheduler, auth |
+| Email ingestion | Cloudflare Workers + Cloudflare Email Routing, postal-mime |
+| Email delivery | [Resend](https://resend.com) |
+| Icons | Lucide React |
+
+## Architecture
+
+```
+Incoming email
+  └─> Cloudflare Email Routing
+        └─> Cloudflare Worker (parses MIME, uploads attachments)
+              └─> Convex HTTP endpoint  ──> Convex database (real-time)
+                                                        │
+                                              Next.js frontend (reads live)
+
+Outgoing email
+  └─> Next.js API route  ──> Resend API  ──> recipient
+                         └─> Convex (saved to Sent / Scheduled folder)
+```
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- [Node.js](https://nodejs.org) 18+
+- [pnpm](https://pnpm.io) (or npm / yarn / bun)
+- A [Convex](https://convex.dev) account
+- A [Resend](https://resend.com) account and API key
+- A Cloudflare account with Email Routing enabled (for receiving mail)
+
+### Environment variables
+
+Copy `.env.example` to `.env.local` and fill in the values:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+| Variable | Description |
+|----------|-------------|
+| `NEXT_PUBLIC_CONVEX_URL` | Convex deployment URL (HTTP API) |
+| `CONVEX_DEPLOYMENT` | Convex deployment name |
+| `NEXT_PUBLIC_CONVEX_SITE_URL` | Convex site URL (for HTTP actions) |
+| `RESEND_API_KEY` | Resend API key for sending emails |
+| `WEBHOOK_SECRET` | Shared secret used by the Cloudflare Worker |
+| `AUTH_SECRET` | Secret used to sign Convex auth tokens |
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Run locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+pnpm install
+pnpm dev
+```
 
-## Learn More
+Open [http://localhost:3000](http://localhost:3000) to see the app.
 
-To learn more about Next.js, take a look at the following resources:
+In a separate terminal, start the Convex development server:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npx convex dev
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Deploy the Cloudflare Worker
 
-## Deploy on Vercel
+```bash
+cd cloudflare
+npm install
+npx wrangler deploy
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Set the `WEBHOOK_SECRET` and `CONVEX_SITE_URL` secrets in your Cloudflare Worker settings to match the values in your `.env.local`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-# email
-# email
+## Project Structure
+
+```
+├── src/
+│   └── app/
+│       ├── inbox/page.tsx        # Main email UI
+│       ├── api/send-email/       # API route – send via Resend
+│       └── api/webhook/email/    # Legacy ingest webhook
+├── convex/
+│   ├── schema.ts                 # Database schema
+│   ├── emails.ts                 # Email queries & mutations
+│   ├── http.ts                   # Convex HTTP endpoints
+│   └── auth.ts                   # Authentication config
+└── cloudflare/
+    └── cloudflare-worker.js      # Email ingestion worker
+```
